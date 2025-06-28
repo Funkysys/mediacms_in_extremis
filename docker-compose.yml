@@ -1,37 +1,99 @@
-services:
-  db:
-    image: postgres:14
-    restart: always
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+version: '3.8'
 
-  redis:
-    image: redis:6
-    restart: always
+# Configuration des réseaux
+networks:
+  video-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
 
-  mediacms:
-    image: mediacms/mediacms:latest
-    ports:
-      - "9000:80"
-    depends_on:
-      - db
-      - redis
-    environment:
-      SECRET_KEY: ${SECRET_KEY}
-      DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL}
-      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD}
-      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_HOST: db
-    volumes:
-      - mediacms_data:/app/media
-
+# Configuration des volumes
 volumes:
-  postgres_data:
-  mediacms_data:
+  video-storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/videos
+
+# Définition des services
+services:
+  # Service NGINX pour servir les vidéos
+  nginx:
+    image: nginx:alpine
+    container_name: video-nginx
+    hostname: video-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./videos/encoded:/usr/share/nginx/html/videos
+      - ./videos/thumbnails:/usr/share/nginx/html/thumbnails
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d/:/etc/nginx/conf.d/
+      - ./logs/nginx:/var/log/nginx
+    environment:
+      - NGINX_HOST=localhost
+      - NGINX_PORT=80
+    restart: unless-stopped
+    networks:
+      video-network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Service pour le traitement des vidéos
+  video-processor:
+    build:
+      context: ./processor
+      dockerfile: Dockerfile
+      args:
+        - BUILD_ENV=${ENV:-production}
+    container_name: video-processor
+    hostname: video-processor
+    volumes:
+      - ./videos:/videos
+      - ./logs/processor:/app/logs
+    environment:
+      - ENV=${ENV:-production}
+      - NGINX_HOST=nginx
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      video-network:
+        ipv4_address: 172.20.0.20
+    depends_on:
+      - nginx
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Service pour la surveillance des logs (optionnel)
+  # logspout:
+  #   image: gliderlabs/logspout
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: syslog://logstash:5000
+  #   networks:
+  #     - video-network
+  #   depends_on:
+  #     - nginx
+  #     - video-processor

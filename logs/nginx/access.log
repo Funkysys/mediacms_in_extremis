@@ -1,0 +1,1 @@
+172.20.0.1 - - [16/Jun/2025:11:54:04 +0000] "GET /favicon.ico HTTP/1.1" 404 146 "http://localhost:8080/health" "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0" "-"
